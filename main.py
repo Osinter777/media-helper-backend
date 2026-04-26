@@ -1,40 +1,37 @@
 from fastapi import FastAPI, Query
 from fastapi.responses import JSONResponse, RedirectResponse
-import yt_dlp
 import requests
-import urllib.parse
 
 app = FastAPI()
-
-SUPPORTED = [
-    "tiktok.com",
-    "instagram.com",
-    "pinterest.",
-    "likee.",
-    "snapchat.com",
-    "youtube.com",
-    "youtu.be"
-]
-
-TIKWM_API = "https://www.tikwm.com/api/"
-
-def check_url(url: str):
-    return any(site in url.lower() for site in SUPPORTED)
-
-def is_tiktok(url: str):
-    return "tiktok.com" in url.lower()
 
 @app.get("/")
 def home():
     return {"status": "UMD Lite API backend работает"}
 
-@app.get("/info")
-def info(url: str = Query(...)):
-    if not check_url(url):
-        return JSONResponse({"error": "Сайт не поддерживается"}, status_code=400)
+@app.get("/download")
+def download(url: str = Query(...), media_type: str = Query("video")):
+    try:
+        api_url = "https://www.tikwm.com/api/"
+        r = requests.get(api_url, params={"url": url})
+        data = r.json()
 
-    if is_tiktok(url):
-        try:
+        if data.get("code") != 0:
+            return JSONResponse({"error": "TikTok API error"}, status_code=500)
+
+        item = data.get("data", {})
+
+        if media_type == "audio":
+            file_url = item.get("music")
+        else:
+            file_url = item.get("play")
+
+        if not file_url:
+            return JSONResponse({"error": "No video found"}, status_code=500)
+
+        return RedirectResponse(file_url)
+
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)        try:
             r = requests.get(TIKWM_API, params={"url": url}, timeout=20)
             data = r.json()
 
