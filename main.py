@@ -1,9 +1,8 @@
 from fastapi import FastAPI, Query
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 import yt_dlp
-import tempfile
-import os
-import uuid
+import requests
+import urllib.parse
 
 app = FastAPI()
 
@@ -17,24 +16,123 @@ SUPPORTED = [
     "youtu.be"
 ]
 
+TIKWM_API = "https://www.tikwm.com/api/"
+
 def check_url(url: str):
     return any(site in url.lower() for site in SUPPORTED)
 
+def is_tiktok(url: str):
+    return "tiktok.com" in url.lower()
+
 @app.get("/")
 def home():
-    return {"status": "UMD Lite backend работает"}
+    return {"status": "UMD Lite API backend работает"}
 
 @app.get("/info")
 def info(url: str = Query(...)):
     if not check_url(url):
         return JSONResponse({"error": "Сайт не поддерживается"}, status_code=400)
 
+    if is_tiktok(url):
+        try:
+            r = requests.get(TIKWM_API, params={"url": url}, timeout=20)
+            data = r.json()
+
+            if data.get("code") != 0:
+                return JSONResponse({"error": data.get("msg", "TikTok API error")}, status_code=500)
+
+            item = data.get("data", {})
+
+            return {
+                "status": "ok",
+                "source": "tikwm",
+                "title": item.get("title"),
+                "thumbnail": item.get("cover"),
+                "duration": item.get("duration"),
+                "webpage_url": url
+            }
+
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=500)
+
+    try:
+        with yt_dlp.YoutubeDL({
+            "quiet": True,
+            "skip_download": True,
+            "noplaylist": True
+        }) as ydl:
+            data = ydl.extract_info(url, download=False)
+
+        return {
+            "status": "ok",
+            "source": "yt-dlp",
+            "title": data.get("title"),
+            "thumbnail": data.get("thumbnail"),
+            "duration": data.get("duration"),
+            "webpage_url": data.get("webpage_url")
+        }
+
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+@app.get("/download")
+def download(
+    url: str = Query(...),
+    media_type: str = Query("video")
+):
+    if not check_url(url):
+        return JSONResponse({"error": "Сайт не поддерживается"}, status_code=400)
+
+    if is_tiktok(url):
+        try:
+            r = requests.get(TIKWM_API, params={"url": url}, timeout=20)
+            data = r.json()
+
+            if data.get("code") != 0:
+                return JSONResponse({"error": data.get("msg", "TikTok API error")}, status_code=500)
+
+            item = data.get("data", {})
+
+            if media_type == "audio":
+                file_url = item.get("music")
+            else:
+                file_url = item.get("play") or item.get("wmplay")
+
+            if not file_url:
+                return JSONResponse({"error": "API не вернул файл"}, status_code=500)
+
+            if file_url.startswith("/"):
+                file_url = "https://www.tikwm.com" + file_url
+
+            return RedirectResponse(file_url)
+
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=500)
+
+    if media_type == "audio":
+        fmt = "bestaudio/best"
+    else:
+        fmt = "best"
+
     opts = {
         "quiet": True,
-        "skip_download": True,
-        "noplaylist": True,
-        "http_headers": {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "format": fmt,
+        "noplaylist": True
+    }
+
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            data = ydl.extract_info(url, download=False)
+
+        direct_url = data.get("url")
+
+        if not direct_url:
+            return JSONResponse({"error": "Не удалось получить ссылку"}, status_code=500)
+
+        return RedirectResponse(direct_url)
+
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             "Referer": "https://www.tiktok.com/"
         }
     }
