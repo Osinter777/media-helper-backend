@@ -1,81 +1,83 @@
-from fastapi import FastAPI
-from pydantic import BaseModel, HttpUrl
-from typing import Optional
-from urllib.parse import urlparse
-from cachetools import TTLCache
-import httpx
+from fastapi import FastAPI, Query
+from fastapi.responses import JSONResponse, RedirectResponse
+import yt_dlp
 
 app = FastAPI()
 
-cache = TTLCache(maxsize=1000, ttl=1800)
+SUPPORTED = [
+    "youtube.com", "youtu.be",
+    "tiktok.com",
+    "instagram.com",
+    "pinterest.",
+    "likee.",
+    "snapchat.com"
+]
 
-class MediaRequest(BaseModel):
-    url: HttpUrl
+def check_url(url: str):
+    return any(site in url.lower() for site in SUPPORTED)
 
-class MediaResponse(BaseModel):
-    ok: bool
-    platform: str
-    title: Optional[str] = None
-    thumbnail: Optional[str] = None
-    duration: Optional[int] = None
-    media_type: Optional[str] = None
-    direct_url: Optional[str] = None
-    source_url: str
-    error: Optional[str] = None
 
-def detect_platform(url: str):
-    host = urlparse(url).netloc.lower()
-    if "youtube.com" in host or "youtu.be" in host:
-        return "youtube"
-    if "instagram.com" in host:
-        return "instagram"
-    if "tiktok.com" in host:
-        return "tiktok"
-    if "snapchat.com" in host:
-        return "snapchat"
-    if "likee" in host:
-        return "likee"
-    if "pinterest" in host:
-        return "pinterest"
-    return "unknown"
+@app.get("/")
+def home():
+    return {"status": "UMD Lite backend работает"}
 
-async def fetch_youtube(url):
-    async with httpx.AsyncClient() as client:
-        r = await client.get(
-            "https://www.youtube.com/oembed",
-            params={"url": url, "format": "json"}
-        )
-    if r.status_code != 200:
-        return MediaResponse(ok=False, platform="youtube", source_url=url, error="No data")
 
-    data = r.json()
-    return MediaResponse(
-        ok=True,
-        platform="youtube",
-        title=data.get("title"),
-        thumbnail=data.get("thumbnail_url"),
-        media_type="video",
-        source_url=url
-    )
+@app.get("/info")
+def info(url: str = Query(...)):
+    if not check_url(url):
+        return JSONResponse({"error": "Сайт не поддерживается"}, status_code=400)
 
-@app.post("/resolve", response_model=MediaResponse)
-async def resolve(req: MediaRequest):
-    url = str(req.url)
+    opts = {
+        "quiet": True,
+        "skip_download": True,
+        "noplaylist": True
+    }
 
-    if url in cache:
-        return cache[url]
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            data = ydl.extract_info(url, download=False)
 
-    platform = detect_platform(url)
+        return {
+            "status": "ok",
+            "title": data.get("title"),
+            "thumbnail": data.get("thumbnail"),
+            "duration": data.get("duration"),
+            "webpage_url": data.get("webpage_url")
+        }
 
-    if platform == "youtube":
-        result = await fetch_youtube(url)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/download")
+def download(
+    url: str = Query(...),
+    media_type: str = Query("video")
+):
+    if not check_url(url):
+        return JSONResponse({"error": "Сайт не поддерживается"}, status_code=400)
+
+    if media_type == "audio":
+        fmt = "bestaudio/best"
     else:
-        result = MediaResponse(
-            ok=True,
-            platform=platform,
-            source_url=url,
-            media_type="unknown"
-        )
+        fmt = "best"
 
-    cache[url] = result
-    return result
+    opts = {
+        "quiet": True,
+        "format": fmt,
+        "noplaylist": True
+    }
+
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            data = ydl.extract_info(url, download=False)
+
+        direct_url = data.get("url")
+
+        if not direct_url:
+            return JSONResponse({"error": "Не удалось получить ссылку"}, status_code=500)
+
+        return RedirectResponse(direct_url)
+
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
