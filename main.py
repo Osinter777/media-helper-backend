@@ -1,40 +1,53 @@
 from fastapi import FastAPI, Query
 from fastapi.responses import JSONResponse, RedirectResponse
 import requests
-import os
 
 app = FastAPI()
 
 TIKWM_API = "https://www.tikwm.com/api/"
-YOUTUBE_API_URL = os.getenv("YOUTUBE_API_URL")
-YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
 
 def is_tiktok(url: str):
     return "tiktok.com" in url.lower()
 
-def is_youtube(url: str):
-    u = url.lower()
-    return "youtube.com" in u or "youtu.be" in u
-
 @app.get("/")
 def home():
     return {
-        "status": "UMD Lite 2.0 работает",
-        "support": "TikTok + YouTube"
+        "status": "UMD Lite работает",
+        "support": "TikTok"
     }
 
 @app.get("/download")
 def download(url: str = Query(...), media_type: str = Query("video")):
-    if is_tiktok(url):
-        try:
-            r = requests.get(TIKWM_API, params={"url": url}, timeout=20)
-            data = r.json()
 
-            if data.get("code") != 0:
-                return JSONResponse({"error": "TikTok API error", "response": data}, status_code=500)
+    if not is_tiktok(url):
+        return JSONResponse({
+            "error": "Поддерживается только TikTok"
+        }, status_code=400)
 
-            item = data.get("data", {})
-            file_url = item.get("music") if media_type == "audio" else item.get("play")
+    try:
+        r = requests.get(TIKWM_API, params={"url": url}, timeout=10)
+        data = r.json()
+
+        if data.get("code") != 0:
+            return JSONResponse({
+                "error": "TikTok API error",
+                "response": data
+            }, status_code=500)
+
+        item = data.get("data", {})
+
+        file_url = item.get("music") if media_type == "audio" else item.get("play")
+
+        if not file_url:
+            return JSONResponse({
+                "error": "TikTok API не вернул файл",
+                "response": data
+            }, status_code=500)
+
+        return RedirectResponse(file_url)
+
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)            file_url = item.get("music") if media_type == "audio" else item.get("play")
 
             if not file_url:
                 return JSONResponse({"error": "TikTok API не вернул файл", "response": data}, status_code=500)
